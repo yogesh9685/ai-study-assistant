@@ -1,24 +1,72 @@
+# =========================
 # Python
+# =========================
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+
+# =========================
+# Virtual Environment
+# =========================
 .venv/
 venv/
+env/
+ENV/
+
+# =========================
+# Environment Variables
+# =========================
 .env
+.env.*
+!.env.example
 
-# Node / frontend
-node_modules/
-dist/
-build/
+# =========================
+# IDE / Editors
+# =========================
+.vscode/
+.idea/
+*.iml
 
-# OS
+# =========================
+# Testing
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# OS Files
+# =========================
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
+# =========================
+# Jupyter Notebook
+# =========================
+.ipynb_checkpoints/
 
-# Logs
-*.log
+# =========================
+# RAG / Vector Databases
+# =========================
+faiss_index/
+chroma_db/
+vector_store/
+
+# =========================
+# Uploaded / Generated Data
+# =========================
+data/*
+!data/.gitkeep
+
+# =========================
+# Temporary Files
+# =========================
+*.tmp
+*.temp
+*.bak
