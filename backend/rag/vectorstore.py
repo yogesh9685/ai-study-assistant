@@ -1,6 +1,6 @@
 from pathlib import Path
 from langchain_community.vectorstores import FAISS
-from embeddings import create_embeddings
+from backend.rag.embeddings import create_embeddings
 
 
 VECTOR_STORE_PATH = "data/faiss_index"
