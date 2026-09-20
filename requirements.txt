@@ -27,6 +27,13 @@ python-dotenv
 requests
 
 # =========================
+# API / Backend Server
+# =========================
+fastapi
+uvicorn[standard]
+python-multipart
+
+# =========================
 # Frontend / UI
 # =========================
 streamlit
