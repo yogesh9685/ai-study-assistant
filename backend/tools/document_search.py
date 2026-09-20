@@ -1,4 +1,4 @@
-﻿"""
+"""
 document_search.py
 ------------------
 Branch: feature/document-search-tool
@@ -52,6 +52,24 @@ from backend.rag.retriever import create_retriever
 # _retriever = None means "not yet initialized".
 # ---------------------------------------------------------------------------
 _retriever = None
+_last_documents = []
+
+
+def get_last_documents():
+    """Return documents retrieved by the most recent document_search call."""
+    return _last_documents
+
+
+def reset_last_documents():
+    """Reset the recorded retrieved documents."""
+    global _last_documents
+    _last_documents = []
+
+
+def reset_retriever():
+    """Reset the cached retriever so subsequent calls reload FAISS from disk."""
+    global _retriever
+    _retriever = None
 
 
 def _get_retriever():
@@ -134,11 +152,14 @@ def document_search(question: str) -> str:
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
 
+    global _last_documents
+
     # Get the shared retriever (loads FAISS once, reuses after that)
     retriever = _get_retriever()
 
     # Retrieve relevant document chunks using the existing MMR retriever
     documents = retriever.invoke(question.strip())
+    _last_documents = documents
 
     # Format and return the results - no LLM call happens here
     return _format_results(documents)

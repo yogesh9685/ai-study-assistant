@@ -155,7 +155,7 @@ def create_study_agent():
 # Run agent
 # ---------------------------------------------------------------------------
 
-def run_agent(agent, question: str) -> str:
+def run_agent(agent, question: str, return_sources: bool = False):
     """
     Send a question to the agent and return its final answer.
 
@@ -165,11 +165,13 @@ def run_agent(agent, question: str) -> str:
         The agent created by create_study_agent().
     question : str
         The user's question.
+    return_sources : bool, default False
+        Whether to return the list of sources along with the answer.
 
     Returns
     -------
-    str
-        The agent's final answer.
+    str or tuple[str, list[dict]]
+        The agent's final answer, or (answer, sources) if return_sources is True.
 
     Raises
     ------
@@ -184,6 +186,11 @@ def run_agent(agent, question: str) -> str:
         raise ValueError("Question cannot be empty.")
 
     try:
+        from backend.tools.document_search import get_last_documents, reset_last_documents
+        from backend.rag.rag_chain import get_sources
+
+        reset_last_documents()
+
         # The LangChain 1.x agent takes a dict with a "messages" list.
         # HumanMessage wraps the user's question.
         result = agent.invoke({"messages": [HumanMessage(content=question.strip())]})
@@ -191,11 +198,29 @@ def run_agent(agent, question: str) -> str:
         # The result is a dict with a "messages" list.
         # The last message is the agent's final answer.
         final_message = result["messages"][-1]
+        answer = final_message.content
 
-        return final_message.content
+        if not return_sources:
+            return answer
 
-    except RuntimeError:
-        
+        used_document_search = False
+        for msg in result.get("messages", []):
+            if getattr(msg, "name", None) == "document_search":
+                used_document_search = True
+                break
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls and any(tc.get("name") == "document_search" for tc in tool_calls):
+                used_document_search = True
+                break
+
+        if used_document_search:
+            sources = get_sources(get_last_documents())
+        else:
+            sources = []
+
+        return answer, sources
+
+    except (ValueError, RuntimeError):
         raise
 
     except Exception as error:
