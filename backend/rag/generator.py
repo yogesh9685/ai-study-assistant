@@ -2,6 +2,9 @@
 generator.py
 ------------
 LLM initialisation and answer generation for the RAG pipeline.
+
+The LLM client is cached after the first call to avoid recreating
+the Groq client on every request.
 """
 
 import logging
@@ -12,10 +15,18 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Module-level singleton — reused across all requests
+_llm_instance = None
+
 
 def create_llm():
-    """Initialise and return the Groq LLM."""
-    return init_chat_model("groq:openai/gpt-oss-20b")
+    """Return the shared LLM instance, initializing it on the first call."""
+    global _llm_instance
+    if _llm_instance is None:
+        logger.info("Initializing LLM client (first time only)...")
+        _llm_instance = init_chat_model("groq:openai/gpt-oss-20b")
+        logger.info("LLM client initialized and cached.")
+    return _llm_instance
 
 
 def create_prompt(question, context):

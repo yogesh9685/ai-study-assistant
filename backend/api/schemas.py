@@ -12,6 +12,12 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class StatusResponse(BaseModel):
+    """Response model for /status endpoint."""
+    has_document: bool
+    filename: str | None = None
+
+
 class Source(BaseModel):
     """Document source reference with optional page number."""
     source: str | None = None

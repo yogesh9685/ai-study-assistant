@@ -5,6 +5,7 @@ API route definitions for health checks, document uploads, and agent chat.
 """
 
 import logging
+import time
 from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
@@ -13,6 +14,7 @@ from backend.api.schemas import (
     ChatRequest,
     ChatResponse,
     HealthResponse,
+    StatusResponse,
     UploadResponse,
 )
 from backend.rag.document_loader import load_document
@@ -59,6 +61,42 @@ def get_agent():
 async def health_check():
     """Health check endpoint to verify backend service availability."""
     return HealthResponse(status="ok")
+
+
+# ---------------------------------------------------------------------------
+# Status endpoint
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/status",
+    response_model=StatusResponse,
+    summary="Check document/index status",
+    description="Returns whether a document is currently indexed on the backend.",
+)
+async def get_status():
+    """
+    Check if a FAISS index exists on disk and return the most recently uploaded filename.
+
+    Used by the Streamlit frontend to restore document state after a page refresh.
+    """
+    from backend.rag.vectorstore import VECTOR_STORE_PATH
+
+    index_path = Path(VECTOR_STORE_PATH)
+    has_document = index_path.exists() and any(
+        f for f in index_path.iterdir() if f.is_file()
+    )
+
+    filename = None
+    if has_document and UPLOAD_DIR.exists():
+        candidates = [
+            f for f in UPLOAD_DIR.iterdir()
+            if f.is_file() and f.name != ".gitkeep"
+        ]
+        if candidates:
+            filename = max(candidates, key=lambda f: f.stat().st_mtime).name
+
+    logger.info("Status check: has_document=%s filename=%s", has_document, filename)
+    return StatusResponse(has_document=has_document, filename=filename)
 
 
 # ---------------------------------------------------------------------------
@@ -139,16 +177,30 @@ async def upload_document(file: UploadFile = File(...)):
 
     # Process document through the existing RAG pipeline
     try:
+        t0 = time.perf_counter()
+
         documents = load_document(str(dest_path))
+        t1 = time.perf_counter()
+        logger.info("Document loading: %.2fs", t1 - t0)
+
         chunks = split_documents(documents)
+        t2 = time.perf_counter()
+        logger.info("Chunking: %.2fs  (%d chunks)", t2 - t1, len(chunks))
+
         vectorstore = create_vectorstore(chunks)
+        t3 = time.perf_counter()
+        logger.info("Embedding + FAISS creation: %.2fs", t3 - t2)
+
         save_vectorstore(vectorstore)
+        t4 = time.perf_counter()
+        logger.info("FAISS save: %.2fs", t4 - t3)
 
         # Invalidate the cached retriever so future queries use the new index
         reset_retriever()
 
         logger.info(
-            "Document processing completed: %s (%d chunks)",
+            "Total upload processing: %.2fs  (%s, %d chunks)",
+            t4 - t0,
             dest_path.name,
             len(chunks),
         )
