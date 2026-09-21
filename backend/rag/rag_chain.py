@@ -25,7 +25,7 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
     Steps:
       1. Load conversation history for this session
       2. Rewrite the question into a standalone question (resolves references)
-      3. Retrieve relevant documents using the standalone question
+      3. Retrieve relevant documents using hybrid search (BM25 + dense RRF)
       4. Generate a grounded answer from the documents
       5. Save both turns (user + assistant) to history
       6. Return the answer and its sources
@@ -42,7 +42,7 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
     from backend.rag.generator import create_llm, generate_answer
     from backend.rag.conversation import create_chat_history, add_message, rewrite_question
     from backend.rag.vectorstore import load_vectorstore
-    from backend.rag.retriever import create_retriever, retrieve_documents
+    from backend.rag.retriever import hybrid_search
     from backend.rag.session_store import get_history, save_history
     from pathlib import Path
 
@@ -63,7 +63,7 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
         # If rewriting fails, fall back to the original question
         standalone_question = question
 
-    # 3. Load vectorstore and retrieve relevant documents
+    # 3. Load vectorstore and retrieve relevant documents via hybrid search
     index_path = Path("data/faiss_index")
     if not index_path.exists() or not any(index_path.iterdir()):
         raise RuntimeError(
@@ -72,8 +72,12 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
         )
 
     vectorstore = load_vectorstore()
-    retriever = create_retriever(vectorstore)
-    documents = retrieve_documents(retriever, standalone_question)
+
+    # Extract stored chunks from the FAISS docstore so BM25 can index them.
+    # FAISS stores documents in its internal docstore keyed by integer index.
+    chunks = list(vectorstore.docstore._dict.values())
+
+    documents = hybrid_search(vectorstore, chunks, standalone_question)
 
     # 4. Generate grounded answer from retrieved documents
     answer = generate_answer(llm, standalone_question, documents)
@@ -86,4 +90,4 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
     history = add_message(history, "assistant", answer)
     save_history(session_id, history)
 
-    return answer, sources
+    return answer, sources
