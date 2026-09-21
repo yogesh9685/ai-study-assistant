@@ -21,6 +21,20 @@ class Source(BaseModel):
 class ChatRequest(BaseModel):
     """Request model for /chat endpoint."""
     question: str = Field(..., description="The user's query or instruction.")
+    session_id: str | None = Field(default=None, description="Optional session ID for conversation memory.")
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("Question cannot be empty.")
+        return value.strip()
+
+
+class AskRequest(BaseModel):
+    """Request model for /ask (conversational RAG) endpoint."""
+    question: str = Field(..., description="The user's question.")
+    session_id: str = Field(..., description="Unique session identifier for conversation memory.")
 
     @field_validator("question")
     @classmethod
