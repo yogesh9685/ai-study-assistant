@@ -6,7 +6,6 @@ langchain-core
 langchain-community
 langchain-groq
 langchain-huggingface
-sentence-transformers
 
 # =========================
 # RAG / Documents
@@ -14,7 +13,8 @@ sentence-transformers
 pypdf
 sentence-transformers
 faiss-cpu
-
+docx2txt
+unstructured
 
 # =========================
 # Environment / Configuration

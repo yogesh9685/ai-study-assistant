@@ -1,4 +1,24 @@
+"""
+rag_chain.py
+------------
+Conversational RAG pipeline.
+
+Steps per turn:
+  1. Load conversation history for the session
+  2. Rewrite the question into a standalone question (resolves "it", "they", etc.)
+  3. Retrieve relevant document chunks via FAISS MMR retriever
+  4. Generate a grounded answer using only the retrieved context
+  5. Save the turn to conversation history
+  6. Return the answer and its sources
+"""
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def get_sources(documents):
+    """Extract unique (source, page) pairs from retrieved documents."""
     sources = []
     seen = set()
 
@@ -22,17 +42,9 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
     """
     Full conversational RAG pipeline for a single turn.
 
-    Steps:
-      1. Load conversation history for this session
-      2. Rewrite the question into a standalone question (resolves references)
-      3. Retrieve relevant documents using hybrid search (BM25 + dense RRF)
-      4. Generate a grounded answer from the documents
-      5. Save both turns (user + assistant) to history
-      6. Return the answer and its sources
-
     Parameters
     ----------
-    question   : the raw user question (may contain references like "it", "they")
+    question   : the raw user question (may contain pronoun references)
     session_id : unique identifier for this user's session
 
     Returns
@@ -40,30 +52,29 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
     (answer: str, sources: list[dict])
     """
     from backend.rag.generator import create_llm, generate_answer
-    from backend.rag.conversation import create_chat_history, add_message, rewrite_question
+    from backend.rag.conversation import add_message, rewrite_question
     from backend.rag.vectorstore import load_vectorstore
-    from backend.rag.retriever import hybrid_search
+    from backend.rag.retriever import create_retriever, retrieve_documents
     from backend.rag.session_store import get_history, save_history
     from pathlib import Path
 
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
 
-    # 1. Load history for this session
+    # 1. Load conversation history for this session
     history = get_history(session_id)
 
     # Create LLM once — reused for both question rewriting and answer generation
     llm = create_llm()
 
     # 2. Rewrite follow-up question into a standalone question
-    #    If history is empty, rewrite_question returns the original question unchanged
+    #    Returns the original question unchanged when history is empty
     try:
         standalone_question = rewrite_question(llm, question, history)
     except Exception:
-        # If rewriting fails, fall back to the original question
         standalone_question = question
 
-    # 3. Load vectorstore and retrieve relevant documents via hybrid search
+    # 3. Load vectorstore and retrieve relevant chunks via FAISS MMR
     index_path = Path("data/faiss_index")
     if not index_path.exists() or not any(index_path.iterdir()):
         raise RuntimeError(
@@ -72,17 +83,15 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
         )
 
     vectorstore = load_vectorstore()
+    retriever = create_retriever(vectorstore)
+    documents = retrieve_documents(retriever, standalone_question)
 
-    # Extract stored chunks from the FAISS docstore so BM25 can index them.
-    # FAISS stores documents in its internal docstore keyed by integer index.
-    chunks = list(vectorstore.docstore._dict.values())
+    logger.info("MMR retriever returned %d document chunks.", len(documents))
 
-    documents = hybrid_search(vectorstore, chunks, standalone_question)
-
-    # 4. Generate grounded answer from retrieved documents
+    # 4. Generate grounded answer from retrieved context
     answer = generate_answer(llm, standalone_question, documents)
 
-    # 5. Extract sources from retrieved documents
+    # 5. Extract source metadata
     sources = get_sources(documents)
 
     # 6. Save this turn to conversation history
@@ -90,4 +99,4 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
     history = add_message(history, "assistant", answer)
     save_history(session_id, history)
 
-    return answer, sources
+    return answer, sources
