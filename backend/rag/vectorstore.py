@@ -37,3 +37,12 @@ def load_vectorstore():
         embeddings,
         allow_dangerous_deserialization=True
     )
+
+
+def delete_vectorstore():
+    """Delete the persisted FAISS vector store index from disk if it exists."""
+    import shutil
+    path = Path(VECTOR_STORE_PATH)
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+

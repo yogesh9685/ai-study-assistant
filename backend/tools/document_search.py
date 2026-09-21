@@ -68,19 +68,15 @@ def reset_last_documents():
 
 def reset_retriever():
     """Reset the cached retriever so subsequent calls reload FAISS from disk."""
-    global _retriever
+    global _retriever, _last_documents
     _retriever = None
+    _last_documents = []
 
 
 def _get_retriever():
     """
     Return the shared retriever, initializing it on the first call.
-
-    Raises
-    ------
-    RuntimeError
-        If the FAISS vector store has not been created yet.
-        The user must upload and index a document first.
+    Returns None if no FAISS vector store exists on disk.
     """
     global _retriever
 
@@ -90,20 +86,15 @@ def _get_retriever():
     # Check that the saved FAISS index actually exists on disk.
     index_path = Path("data/faiss_index")
     if not index_path.exists() or not any(index_path.iterdir()):
-        raise RuntimeError(
-            "No vector store found. "
-            "Please upload and index a document before searching."
-        )
+        return None
 
     try:
         vectorstore = load_vectorstore()
         _retriever = create_retriever(vectorstore)
         return _retriever
 
-    except Exception as error:
-        raise RuntimeError(
-            f"Failed to load vector store: {error}"
-        ) from error
+    except Exception:
+        return None
 
 
 def _format_results(documents):
@@ -156,6 +147,9 @@ def document_search(question: str) -> str:
 
     # Get the shared retriever (loads FAISS once, reuses after that)
     retriever = _get_retriever()
+    if retriever is None:
+        _last_documents = []
+        return "No study documents are currently uploaded or indexed. Please inform the user that they must upload a study document first before asking questions about documents."
 
     # Retrieve relevant document chunks using the existing MMR retriever
     documents = retriever.invoke(question.strip())
@@ -163,3 +157,4 @@ def document_search(question: str) -> str:
 
     # Format and return the results - no LLM call happens here
     return _format_results(documents)
+

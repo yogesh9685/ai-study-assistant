@@ -54,7 +54,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from langchain.chat_models import init_chat_model
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.tools import tool
 
 # Import the two existing tools
@@ -155,7 +155,7 @@ def create_study_agent():
 # Run agent
 # ---------------------------------------------------------------------------
 
-def run_agent(agent, question: str, return_sources: bool = False):
+def run_agent(agent, question: str, session_id: str | None = None, return_sources: bool = False):
     """
     Send a question to the agent and return its final answer.
 
@@ -165,6 +165,8 @@ def run_agent(agent, question: str, return_sources: bool = False):
         The agent created by create_study_agent().
     question : str
         The user's question.
+    session_id : str, optional
+        Unique session ID to maintain conversation history.
     return_sources : bool, default False
         Whether to return the list of sources along with the answer.
 
@@ -191,14 +193,40 @@ def run_agent(agent, question: str, return_sources: bool = False):
 
         reset_last_documents()
 
+        messages = []
+        if session_id:
+            from backend.rag.session_store import get_history
+            raw_history = get_history(session_id)
+            for item in raw_history:
+                role = item.get("role")
+                content = item.get("content", "")
+                if role == "user":
+                    messages.append(HumanMessage(content=content))
+                elif role == "assistant":
+                    messages.append(AIMessage(content=content))
+
+            # Limit history to recent turns to avoid exceeding context window
+            if len(messages) > 20:
+                messages = messages[-20:]
+
+        messages.append(HumanMessage(content=question.strip()))
+
         # The LangChain 1.x agent takes a dict with a "messages" list.
-        # HumanMessage wraps the user's question.
-        result = agent.invoke({"messages": [HumanMessage(content=question.strip())]})
+        result = agent.invoke({"messages": messages})
 
         # The result is a dict with a "messages" list.
         # The last message is the agent's final answer.
         final_message = result["messages"][-1]
         answer = final_message.content
+
+        # Persist conversation turn if session_id is provided
+        if session_id:
+            from backend.rag.session_store import get_history, save_history
+            from backend.rag.conversation import add_message
+            history = get_history(session_id)
+            history = add_message(history, "user", question.strip())
+            history = add_message(history, "assistant", answer)
+            save_history(session_id, history)
 
         if not return_sources:
             return answer
@@ -219,6 +247,7 @@ def run_agent(agent, question: str, return_sources: bool = False):
             sources = []
 
         return answer, sources
+
 
     except (ValueError, RuntimeError):
         raise

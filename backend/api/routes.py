@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from backend.api.schemas import (
+    AskRequest,
     ChatRequest,
     ChatResponse,
     HealthResponse,
@@ -16,9 +17,10 @@ from backend.api.schemas import (
 )
 from backend.rag.document_loader import load_document
 from backend.rag.chunks import split_documents
-from backend.rag.vectorstore import create_vectorstore, save_vectorstore
+from backend.rag.vectorstore import create_vectorstore, save_vectorstore, delete_vectorstore
 from backend.tools.document_search import reset_retriever
 from backend.agent.agent import create_study_agent, run_agent
+
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +174,40 @@ async def upload_document(file: UploadFile = File(...)):
 
 
 # ---------------------------------------------------------------------------
+# Delete documents endpoint
+# ---------------------------------------------------------------------------
+
+@router.delete(
+    "/documents",
+    summary="Delete all uploaded documents and reset vector store",
+    description="Deletes all uploaded files, removes the FAISS index, and resets the retriever.",
+)
+async def delete_documents():
+    """Clear uploaded files, vector store index, and retriever."""
+    try:
+        if UPLOAD_DIR.exists():
+            for file_path in UPLOAD_DIR.iterdir():
+                if file_path.is_file():
+                    try:
+                        file_path.unlink()
+                    except Exception as err:
+                        logger.warning("Could not delete file %s: %s", file_path, err)
+
+        delete_vectorstore()
+        reset_retriever()
+
+        logger.info("All documents and vector store index cleared successfully.")
+        return {"message": "All documents and vector store index cleared successfully."}
+
+    except Exception as error:
+        logger.error("Failed to delete documents: %s", error)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete documents: {error}",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Chat endpoint
 # ---------------------------------------------------------------------------
 
@@ -183,9 +219,8 @@ async def upload_document(file: UploadFile = File(...)):
 )
 async def chat(request: ChatRequest):
     """
-    Handle user question using the existing tool-calling agent.
+    Handle user question using the tool-calling agent.
     """
-    # Validate question content
     if not request.question or not request.question.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -199,6 +234,7 @@ async def chat(request: ChatRequest):
         answer, sources = run_agent(
             agent,
             request.question,
+            session_id=request.session_id,
             return_sources=True,
         )
 
@@ -213,12 +249,6 @@ async def chat(request: ChatRequest):
         )
     except RuntimeError as run_err:
         logger.error("Agent execution error: %s", run_err)
-        err_msg = str(run_err)
-        if "No vector store found" in err_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=err_msg,
-            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Agent encountered an error while processing the request.",
@@ -229,3 +259,61 @@ async def chat(request: ChatRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing the request.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Conversational endpoint
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/ask",
+    response_model=ChatResponse,
+    summary="Ask a question with conversation memory",
+    description=(
+        "Send a question with a session ID. The tool-calling agent resolves conversation "
+        "context and routes to calculator, document search, or conversational answer."
+    ),
+)
+async def ask(request: AskRequest):
+    """
+    Conversational agent endpoint with session memory.
+    """
+    if not request.question or not request.question.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Question cannot be empty.",
+        )
+
+    logger.info("Conversational request received (session: %s)", request.session_id)
+
+    try:
+        agent = get_agent()
+        answer, sources = run_agent(
+            agent,
+            request.question,
+            session_id=request.session_id,
+            return_sources=True,
+        )
+
+        logger.info("Conversational execution completed (session: %s)", request.session_id)
+        return ChatResponse(answer=answer, sources=sources)
+
+    except ValueError as val_err:
+        logger.error("Ask request validation error: %s", val_err)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(val_err),
+        )
+    except RuntimeError as run_err:
+        logger.error("Agent execution error: %s", run_err)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Agent encountered an error while processing the request.",
+        )
+    except Exception as error:
+        logger.error("Ask endpoint failed: %s", error)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing the request.",
+        )
+
