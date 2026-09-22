@@ -86,7 +86,7 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
     retriever = create_retriever(vectorstore)
     documents = retrieve_documents(retriever, standalone_question)
 
-    logger.info("MMR retriever returned %d document chunks.", len(documents))
+    logger.info("Hybrid + reranked retriever returned %d document chunks.", len(documents))
 
     # 4. Generate grounded answer from retrieved context
     answer = generate_answer(llm, standalone_question, documents)

@@ -71,6 +71,11 @@ def reset_retriever():
     global _retriever, _last_documents
     _retriever = None
     _last_documents = []
+    try:
+        from backend.rag.hybrid_search import reset_bm25_cache
+        reset_bm25_cache()
+    except Exception:
+        pass
 
 
 def _get_retriever():
@@ -151,8 +156,9 @@ def document_search(question: str) -> str:
         _last_documents = []
         return "No study documents are currently uploaded or indexed. Please inform the user that they must upload a study document first before asking questions about documents."
 
-    # Retrieve relevant document chunks using the existing MMR retriever
-    documents = retriever.invoke(question.strip())
+    # Retrieve relevant document chunks using hybrid search (BM25 + FAISS) and Cross-Encoder reranker
+    from backend.rag.retriever import retrieve_documents
+    documents = retrieve_documents(retriever, question.strip())
     _last_documents = documents
 
     # Format and return the results - no LLM call happens here

@@ -7,7 +7,9 @@ An AI-powered study assistant that lets you upload study documents and ask quest
 ## Features
 
 - 📄 **Document Upload** — PDF, TXT, DOCX, Markdown, CSV
-- 🔍 **RAG Pipeline** — FAISS vector store + MMR retriever + grounded LLM answers
+- 🔀 **Hybrid Search** — BM25 keyword retrieval + FAISS dense semantic search
+- 🎯 **Cross-Encoder Reranking** — `ms-marco-MiniLM-L-6-v2` reranks candidate chunks for maximum precision
+- 🔍 **Grounded RAG Pipeline** — only top-reranked chunks passed to LLM with strict grounding
 - 📚 **Source Citations** — every answer includes the document and page it came from
 - 🧮 **Calculator Tool** — safe AST-based math evaluation (no `eval`)
 - 🤖 **Tool-Calling Agent** — automatically routes to calculator, document search, or conversation
@@ -38,18 +40,22 @@ FastAPI Backend  (backend/main.py)
                       └─ Document Search Tool
                            │
                            ▼
-                        FAISS MMR Retriever
-                           │
-                           ▼
-                        Relevant Chunks
-                           │
-                           ▼
+                        Hybrid Search
+                        ┌──────────────┐
+                        │ BM25 + FAISS │
+                        └──────┬───────┘
+                               ▼
+                        Candidate Chunks (Top 10)
+                               ▼
+                        Cross-Encoder Reranker
+                        (ms-marco-MiniLM-L-6-v2)
+                               ▼
+                        Top Chunks (Top 4)
+                               ▼
                         Grounded Prompt
-                           │
-                           ▼
+                               ▼
                         LLM (Groq)
-                           │
-                           ▼
+                               ▼
                         Answer + Sources
 
 Conversation history is stored in-memory per session (session_id).
@@ -64,6 +70,8 @@ Conversation history is stored in-memory per session (session_id).
 | LLM | Groq API (`openai/gpt-oss-20b`) |
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (HuggingFace) |
 | Vector Store | FAISS (CPU) |
+| Keyword Search | `rank-bm25` (BM25Okapi) |
+| Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` (sentence-transformers) |
 | RAG Framework | LangChain |
 | Backend | FastAPI + Uvicorn |
 | Frontend | Streamlit |
@@ -85,7 +93,9 @@ ai-study-assistant/
 │   │   ├── chunks.py           # RecursiveCharacterTextSplitter
 │   │   ├── embeddings.py       # HuggingFace sentence-transformers
 │   │   ├── vectorstore.py      # FAISS create/save/load/delete
-│   │   ├── retriever.py        # MMR retriever + similarity search
+│   │   ├── hybrid_search.py    # BM25 + FAISS hybrid retrieval & deduplication
+│   │   ├── reranker.py         # Cross-Encoder candidate reranker
+│   │   ├── retriever.py        # Hybrid reranked retriever interface
 │   │   ├── generator.py        # Grounded prompt + LLM answer
 │   │   ├── conversation.py     # Question rewriting + history helpers
 │   │   ├── session_store.py    # In-memory session history store
@@ -94,14 +104,16 @@ ai-study-assistant/
 │   │   └── agent.py            # Tool-calling agent (calculator + doc search)
 │   └── tools/
 │       ├── calculator.py        # Safe AST-based math calculator
-│       └── document_search.py  # FAISS-backed document search tool
+│       └── document_search.py  # Hybrid search + reranker document tool
 ├── frontend/
 │   └── app.py                # Streamlit UI
 ├── data/
 │   ├── uploads/              # Uploaded documents (git-ignored)
 │   └── faiss_index/          # Generated FAISS index (git-ignored)
 ├── tests/
-│   └── test_rag_manual.py    # Manual RAG evaluation script
+│   ├── test_hybrid_search_reranking.py  # Hybrid search & reranking test suite
+│   ├── test_calculator_conversation_delete.py  # API and agent integration tests
+│   └── test_rag_manual.py               # Manual RAG evaluation script
 ├── .env.example              # Environment variable template
 ├── .gitignore
 ├── requirements.txt
@@ -228,7 +240,7 @@ Clear all uploaded documents and reset the FAISS index.
 
 ---
 
-## RAG Pipeline
+## RAG Pipeline (Hybrid Retrieval + Cross-Encoder Reranking)
 
 ```
 Uploaded Document
@@ -240,15 +252,25 @@ Text Chunker      (chunk_size=800, overlap=100)
 Embeddings        (all-MiniLM-L6-v2, 384-dim)
       ▼
 FAISS Index       (saved to data/faiss_index/)
+
+User Question
       ▼
-MMR Retriever     (k=4, fetch_k=10, diversity via MMR)
-      ▼
-Relevant Chunks
-      ▼
+┌─────────────────────────┐
+│     Hybrid Retrieval    │
+│  BM25           FAISS   │
+│ (keyword)     (semantic)│
+└────────────┬────────────┘
+             ▼
+Candidate Chunks (Top 10, Deduplicated)
+             ▼
+Cross-Encoder Reranker (ms-marco-MiniLM-L-6-v2)
+             ▼
+Top Chunks (Top 4)
+             ▼
 Grounded Prompt   ("Answer using only the context below...")
-      ▼
+             ▼
 Groq LLM
-      ▼
+             ▼
 Answer + Sources
 ```
 
@@ -261,7 +283,7 @@ User Question
       ▼
 Agent (Groq LLM + tools)
       ├── "25 * 8"              ──► Calculator Tool  ──► 200
-      ├── "Explain Python"      ──► Document Search  ──► FAISS ──► Chunks ──► Answer
+      ├── "Explain Python"      ──► Document Search  ──► Hybrid + Reranker ──► Chunks ──► Answer
       └── "Hello"               ──► Direct LLM response
 ```
 
@@ -283,14 +305,30 @@ Each Streamlit session gets a unique `session_id` (UUID). The backend stores con
 
 ## Testing
 
-Run the manual RAG evaluation script:
+### 1. Hybrid Search & Cross-Encoder Reranking Suite
+
+Verify BM25 keyword matching, FAISS semantic search, deduplication, Cross-Encoder score reordering, and top-k filtering:
 
 ```bash
-# From project root — requires a document at data/python.txt
+python tests/test_hybrid_search_reranking.py
+```
+
+### 2. End-to-End API, Conversation & Deletion Suite
+
+Verify calculator evaluation, multi-turn conversation memory, document upload, hybrid document search via `/ask`, document deletion, and post-deletion fallback:
+
+```bash
+python tests/test_calculator_conversation_delete.py
+```
+
+### 3. Manual RAG Evaluation Script
+
+```bash
+# Requires a document at data/python.txt
 python tests/test_rag_manual.py
 ```
 
-This tests: document load, chunking, FAISS indexing, MMR retrieval, answer generation, source extraction, and out-of-scope question handling.
+This tests: document load, chunking, FAISS indexing, hybrid retrieval, answer generation, source extraction, and out-of-scope question handling.
 
 ---
 
