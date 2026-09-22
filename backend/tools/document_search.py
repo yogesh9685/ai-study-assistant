@@ -1,99 +1,90 @@
 """
 document_search.py
 ------------------
-Branch: feature/document-search-tool
-
-A LangChain tool that searches the existing FAISS vector store
+A LangChain tool that searches the session-isolated FAISS vector store
 and returns relevant document chunks for a given question.
 
-Architecture
-------------
-  Agent
-    |
-    v
-  document_search (this tool)
-    |
-    v
-  existing MMR retriever  (backend.rag.retriever)
-    |
-    v
-  FAISS vector store      (backend.rag.vectorstore)
-    |
-    v
-  Formatted document results
-    |
-    v
-  Agent -> LLM -> Final Answer
-
-The tool does NOT call the LLM.
-It only retrieves and formats relevant document chunks.
-
-Usage
------
-  from backend.tools.document_search import document_search
-
-  result = document_search.invoke("What is Python?")
-  print(result)
+Each session maintains its own vector store, retriever cache, and
+retrieved documents history.
 """
 
-from pathlib import Path
+import logging
+from contextvars import ContextVar
+from typing import Any
 from langchain_core.tools import tool
 
-from backend.rag.vectorstore import load_vectorstore
+from backend.rag.vectorstore import load_vectorstore, has_vectorstore
 from backend.rag.retriever import create_retriever
 
+logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Module-level retriever (initialized once, reused on every call)
-#
-# The retriever is created lazily the first time the tool is called.
-# This avoids re-loading embeddings and FAISS on every query.
-#
-# _retriever = None means "not yet initialized".
-# ---------------------------------------------------------------------------
-_retriever = None
-_last_documents = []
+# Context variable tracking the active session_id for the current execution context
+current_session_id: ContextVar[str | None] = ContextVar("current_session_id", default=None)
 
+# Session-isolated retriever cache: {session_id: retriever}
+_retrievers: dict[str, Any] = {}
 
-def get_last_documents():
-    """Return documents retrieved by the most recent document_search call."""
-    return _last_documents
+# Session-isolated last retrieved documents: {session_id: list}
+_last_documents: dict[str, list] = {}
 
 
-def reset_last_documents():
-    """Reset the recorded retrieved documents."""
-    global _last_documents
-    _last_documents = []
+def get_last_documents(session_id: str | None = None) -> list:
+    """Return documents retrieved by the most recent document_search call for the session."""
+    sid = session_id or current_session_id.get()
+    if sid:
+        return _last_documents.get(sid, [])
+    return _last_documents.get("_default", [])
 
 
-def reset_retriever():
-    """Reset the cached retriever so subsequent calls reload FAISS from disk."""
-    global _retriever, _last_documents
-    _retriever = None
-    _last_documents = []
+def reset_last_documents(session_id: str | None = None):
+    """Reset the recorded retrieved documents for a session."""
+    sid = session_id or current_session_id.get()
+    if sid:
+        _last_documents.pop(sid, None)
+    else:
+        _last_documents.clear()
 
 
-def _get_retriever():
+def reset_retriever(session_id: str | None = None):
+    """Reset cached retriever so subsequent calls reload FAISS from disk."""
+    if session_id:
+        _retrievers.pop(session_id, None)
+        _last_documents.pop(session_id, None)
+        logger.info("Reset retriever cache for session: %s", session_id)
+    else:
+        _retrievers.clear()
+        _last_documents.clear()
+        logger.info("Reset all retriever caches")
+
+
+def _get_retriever(session_id: str | None = None):
     """
-    Return the shared retriever, initializing it on the first call.
-    Returns None if no FAISS vector store exists on disk.
+    Return the session-specific retriever, initializing it on first call.
+    Returns None if no FAISS vector store exists on disk for this session.
     """
-    global _retriever
+    sid = session_id or current_session_id.get()
 
-    if _retriever is not None:
-        return _retriever
+    if sid and sid in _retrievers:
+        return _retrievers[sid]
 
-    # Check that the saved FAISS index actually exists on disk.
-    index_path = Path("data/faiss_index")
-    if not index_path.exists() or not any(index_path.iterdir()):
+    if not sid and "_default" in _retrievers:
+        return _retrievers["_default"]
+
+    # Check that the saved FAISS index exists on disk for this session
+    if not has_vectorstore(sid):
         return None
 
     try:
-        vectorstore = load_vectorstore()
-        _retriever = create_retriever(vectorstore)
-        return _retriever
+        vectorstore = load_vectorstore(sid)
+        retriever = create_retriever(vectorstore)
+        if sid:
+            _retrievers[sid] = retriever
+        else:
+            _retrievers["_default"] = retriever
+        return retriever
 
-    except Exception:
+    except Exception as exc:
+        logger.error("Failed to load vector store for session %s: %s", sid, exc)
         return None
 
 
@@ -101,9 +92,6 @@ def _format_results(documents):
     """
     Format a list of retrieved LangChain Document objects into a
     readable string the agent can use to answer the user's question.
-
-    Each document shows its source, page number (if available),
-    and the retrieved text content.
     """
     if not documents:
         return "No relevant information was found in the uploaded documents."
@@ -120,7 +108,6 @@ def _format_results(documents):
         page_line   = f"Page: {page}" if page is not None else ""
         content_block = f"Content:\n{content}"
 
-        # Build this document's section, skipping empty page line
         section_lines = [header, source_line]
         if page_line:
             section_lines.append(page_line)
@@ -138,23 +125,29 @@ def document_search(question: str) -> str:
     to the user question. Use this tool when the user asks anything
     about the content of their uploaded documents.
     """
-
-    # Validate: reject empty questions
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
 
-    global _last_documents
+    sid = current_session_id.get()
 
-    # Get the shared retriever (loads FAISS once, reuses after that)
-    retriever = _get_retriever()
+    # Get the session's retriever
+    retriever = _get_retriever(sid)
     if retriever is None:
-        _last_documents = []
-        return "No study documents are currently uploaded or indexed. Please inform the user that they must upload a study document first before asking questions about documents."
+        if sid:
+            _last_documents.pop(sid, None)
+        else:
+            _last_documents.pop("_default", None)
+        return (
+            "No study documents are currently uploaded or indexed for your session. "
+            "Please inform the user that they must upload a study document first before "
+            "asking questions about documents."
+        )
 
-    # Retrieve relevant document chunks using the existing MMR retriever
+    # Retrieve relevant document chunks using the MMR retriever
     documents = retriever.invoke(question.strip())
-    _last_documents = documents
+    if sid:
+        _last_documents[sid] = documents
+    else:
+        _last_documents["_default"] = documents
 
-    # Format and return the results - no LLM call happens here
     return _format_results(documents)
-

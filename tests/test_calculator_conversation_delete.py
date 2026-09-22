@@ -55,7 +55,11 @@ def run_tests():
     # 3. Test Document upload
     print("\n[3] Testing POST /upload with study document...")
     doc_content = b"Python was created by Guido van Rossum and released in 1991."
-    resp = client.post("/upload", files={"file": ("test_guido.txt", doc_content, "text/plain")})
+    resp = client.post(
+        "/upload",
+        files={"file": ("test_guido.txt", doc_content, "text/plain")},
+        data={"session_id": session_id},
+    )
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     print(" -> PASS: Document uploaded and indexed successfully.")
 
@@ -72,10 +76,10 @@ def run_tests():
 
     # 5. Test Document deletion via DELETE /documents
     print("\n[5] Testing DELETE /documents...")
-    resp = client.delete("/documents")
+    resp = client.delete("/documents", params={"session_id": session_id})
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-    faiss_dir = Path("data/faiss_index")
-    assert not faiss_dir.exists() or not any(faiss_dir.iterdir()), "Expected faiss_index to be deleted"
+    session_vs_dir = Path("data/vectorstores") / session_id
+    assert not session_vs_dir.exists() or not any(session_vs_dir.iterdir()), "Expected session vectorstore to be deleted"
     print(" -> PASS: Vector store and uploaded documents deleted!")
 
     # 6. Test Calculator tool works AFTER document deletion

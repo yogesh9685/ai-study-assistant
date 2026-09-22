@@ -34,9 +34,9 @@ logger = logging.getLogger("ai_study_assistant")
 async def lifespan(app: FastAPI):
     """Application lifespan context manager for startup and shutdown events."""
     logger.info("Starting AI Study Assessment API...")
-    # Pre-create upload directory
-    uploads_dir = Path("data/uploads")
-    uploads_dir.mkdir(parents=True, exist_ok=True)
+    # Pre-create upload and vectorstore directories
+    Path("data/uploads").mkdir(parents=True, exist_ok=True)
+    Path("data/vectorstores").mkdir(parents=True, exist_ok=True)
     yield
     logger.info("Shutting down AI Study Assessment API...")
 

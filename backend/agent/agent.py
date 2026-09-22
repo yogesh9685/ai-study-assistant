@@ -187,11 +187,16 @@ def run_agent(agent, question: str, session_id: str | None = None, return_source
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
 
-    try:
-        from backend.tools.document_search import get_last_documents, reset_last_documents
-        from backend.rag.rag_chain import get_sources
+    from backend.tools.document_search import (
+        current_session_id,
+        get_last_documents,
+        reset_last_documents,
+    )
+    from backend.rag.rag_chain import get_sources
 
-        reset_last_documents()
+    token = current_session_id.set(session_id)
+    try:
+        reset_last_documents(session_id)
 
         messages = []
         if session_id:
@@ -242,12 +247,11 @@ def run_agent(agent, question: str, session_id: str | None = None, return_source
                 break
 
         if used_document_search:
-            sources = get_sources(get_last_documents())
+            sources = get_sources(get_last_documents(session_id))
         else:
             sources = []
 
         return answer, sources
-
 
     except (ValueError, RuntimeError):
         raise
@@ -256,6 +260,9 @@ def run_agent(agent, question: str, session_id: str | None = None, return_source
         raise RuntimeError(
             f"Agent encountered an unexpected error: {error}"
         ) from error
+
+    finally:
+        current_session_id.reset(token)
 
 
 # ---------------------------------------------------------------------------

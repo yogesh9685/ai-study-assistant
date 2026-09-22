@@ -74,15 +74,16 @@ def run_conversational_rag(question: str, session_id: str) -> tuple[str, list]:
     except Exception:
         standalone_question = question
 
+    from backend.rag.vectorstore import has_vectorstore
+
     # 3. Load vectorstore and retrieve relevant chunks via FAISS MMR
-    index_path = Path("data/faiss_index")
-    if not index_path.exists() or not any(index_path.iterdir()):
+    if not has_vectorstore(session_id):
         raise RuntimeError(
-            "No vector store found. "
+            "No vector store found for this session. "
             "Please upload and index a document before asking questions."
         )
 
-    vectorstore = load_vectorstore()
+    vectorstore = load_vectorstore(session_id)
     retriever = create_retriever(vectorstore)
     documents = retrieve_documents(retriever, standalone_question)
 

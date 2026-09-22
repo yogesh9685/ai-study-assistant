@@ -169,10 +169,14 @@ def check_health() -> bool:
         return False
 
 
-def get_backend_status() -> dict:
-    """Ask the backend whether a document is currently indexed."""
+def get_backend_status(session_id: str) -> dict:
+    """Ask the backend whether a document is currently indexed for this session."""
     try:
-        r = requests.get(f"{API_BASE_URL}/status", timeout=5)
+        r = requests.get(
+            f"{API_BASE_URL}/status",
+            params={"session_id": session_id},
+            timeout=5,
+        )
         if r.status_code == 200:
             return r.json()
     except Exception:
@@ -180,13 +184,14 @@ def get_backend_status() -> dict:
     return {"has_document": False, "filename": None}
 
 
-def upload_document(file) -> dict:
-    """Upload a document to the backend for indexing."""
+def upload_document(file, session_id: str) -> dict:
+    """Upload a document to the backend for indexing isolated by session."""
     try:
         files = {
             "file": (file.name, file.getvalue(), file.type or "application/octet-stream")
         }
-        r = requests.post(f"{API_BASE_URL}/upload", files=files, timeout=120)
+        data = {"session_id": session_id}
+        r = requests.post(f"{API_BASE_URL}/upload", files=files, data=data, timeout=120)
         if r.status_code == 200:
             data = r.json()
             return {
@@ -237,10 +242,14 @@ def ask_question(question: str, session_id: str) -> dict:
         return {"success": False, "error": "Something went wrong. Please try again."}
 
 
-def clear_documents() -> bool:
-    """Tell the backend to clear all documents and reset the FAISS index."""
+def clear_documents(session_id: str) -> bool:
+    """Tell the backend to clear all documents and reset the FAISS index for this session."""
     try:
-        r = requests.delete(f"{API_BASE_URL}/documents", timeout=15)
+        r = requests.delete(
+            f"{API_BASE_URL}/documents",
+            params={"session_id": session_id},
+            timeout=15,
+        )
         return r.status_code == 200
     except Exception:
         return False
@@ -289,7 +298,7 @@ def init_session():
 
     # Restore document state from backend on first load / after refresh
     if "doc_checked" not in st.session_state:
-        status = get_backend_status()
+        status = get_backend_status(st.session_state.session_id)
         if status.get("has_document"):
             st.session_state.doc_name = status.get("filename") or "Document"
             st.session_state.doc_ready = True
@@ -350,7 +359,7 @@ def render_sidebar():
         # ── Clear session ─────────────────────────────────────────────────
         if st.button("🗑️ Clear Session", use_container_width=True, key="btn_clear"):
             with st.spinner("Clearing..."):
-                clear_documents()
+                clear_documents(st.session_state.session_id)
             st.session_state.doc_name = None
             st.session_state.doc_chunks = None
             st.session_state.doc_ready = False
@@ -422,7 +431,7 @@ def _render_upload_widget():
     status_area = st.empty()
     status_area.info("⬆️ Uploading and processing document…")
 
-    result = upload_document(uploaded)
+    result = upload_document(uploaded, st.session_state.session_id)
 
     if result["success"]:
         st.session_state.doc_name = result["filename"]
