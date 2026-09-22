@@ -17,7 +17,17 @@ import streamlit as st
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
+
+# Backend URL
+if "API_BASE_URL" in st.secrets:
+    API_BASE_URL = st.secrets["API_BASE_URL"]
+else:
+    API_BASE_URL = os.getenv(
+        "API_BASE_URL",
+        "http://localhost:8000"
+    )
+
+API_BASE_URL = API_BASE_URL.rstrip("/")
 MAX_FILE_MB = 10
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
